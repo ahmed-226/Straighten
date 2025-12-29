@@ -15,6 +15,10 @@ from skimage import morphology
 from skimage.transform import resize
 import cv2
 import os
+import sys
+# Add parent directory to path to import data modules
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 import numpy as np
 import nibabel as nib
 from PIL import Image
@@ -27,6 +31,7 @@ from scipy.ndimage import map_coordinates
 from straighten import Interpolator
 from scipy.optimize import curve_fit
 import nibabel.orientations as nio
+from data.mask_extract import get_vertbody
 
 def find_largest_file(folder_path):
     largest_file_path = None
@@ -211,6 +216,35 @@ def process_layer(layer):
             processed_layer[labeled_array == leftmost_feature] = label
 
     return processed_layer
+
+def process_3d_array_robust(arr):
+    """
+    Process 3D array slice by slice using get_vertbody to robustly remove pedicles.
+    Assumes arr is (H, W, D) and D is the slice dimension (sagittal).
+    """
+    # Debug: Print array shape
+    print(f"DEBUG: process_3d_array_robust input shape: {arr.shape}")
+    
+    processed_arr = np.zeros_like(arr)
+    for z in range(arr.shape[2]):
+        slice_img = arr[:,:,z]
+        # Only process if there is a vertebra component
+        if np.sum(slice_img) > 0:
+            try:
+                # get_vertbody returns: cropped_body, body_mask_in_orig_coords, center
+                _, body_mask, _ = get_vertbody(slice_img)
+                
+                # Debug: Check shapes before assignment if they mismatch
+                if body_mask.shape != slice_img.shape:
+                     print(f"CRITICAL ERROR slice {z}: slice_img {slice_img.shape} vs body_mask {body_mask.shape}")
+                
+                processed_arr[:,:,z] = body_mask
+            except Exception as e:
+                # Fallback or simple copy if error
+                print(f"Warning: De-pedicle failed for slice {z}: {e}")
+                print(f"Debug Info: slice_img shape: {slice_img.shape}")
+                processed_arr[:,:,z] = slice_img
+    return processed_arr
 
 def process_3d_array(arr):
     processed_arr = np.zeros_like(arr)
@@ -550,9 +584,9 @@ def process_mask3d(ct_path,label_path,json_path,vertebrae_ids,output_folder,outp
         #z0,z1= find_single_component_layers(extracted_label_volume ,label)
         #extracted_ct_volume = extracted_ct_volume[:,:,z0+4:z1-4]
         #extracted_label_volume = extracted_label_volume[:,:,z0+4:z1-4]
-        
         # 去除椎弓根部分，这里就采取提取最左边连通域的方法
-        #extracted_label_volume = process_3d_array(extracted_label_volume)
+        # To remove the pedicle portion, we extract the leftmost connected component.
+        extracted_label_volume = process_3d_array_robust(extracted_label_volume)
         
         extracted_mask_volume = extract_mask_volume(extracted_label_volume,label)
         #extracted_mask_volume = extract_mask_3dvolume(extracted_label_volume,label)
